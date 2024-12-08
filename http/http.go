@@ -1,15 +1,18 @@
 package http
 
 import (
+    "encoding/json"
     "fmt"
     "io"
     "log"
     "math/rand"
     "net"
+    "net/http"
     "os"
     "path/filepath"
     "runtime"
     "strings"
+    "sync"
     "sync/atomic"
     "syscall"
     "time"
@@ -28,7 +31,29 @@ import (
 var (
     requestCount  uint64
     bytesReceived uint64
+    ipBlacklist   sync.Map
 )
+
+type IPAPIResponse struct {
+    Query        string `json:"query"`
+    Status       string `json:"status"`
+    Country      string `json:"country"`
+    CountryCode  string `json:"countryCode"`
+    Region       string `json:"region"`
+    RegionName   string `json:"regionName"`
+    City         string `json:"city"`
+    Zip          string `json:"zip"`
+    Lat          float64 `json:"lat"`
+    Lon          float64 `json:"lon"`
+    Timezone     string `json:"timezone"`
+    ISP          string `json:"isp"`
+    Org          string `json:"org"`
+    AS           string `json:"as"`
+    Reverse      string `json:"reverse"`
+    Mobile       bool   `json:"mobile"`
+    Proxy        bool   `json:"proxy"`
+    Hosting      bool   `json:"hosting"`
+}
 
 func setConsoleTitle(title string) {
     kernel32, _ := syscall.LoadLibrary("kernel32.dll")
@@ -46,6 +71,31 @@ func triggerGarbageCollection() {
         time.Sleep(1 * time.Minute) // Adjust the interval as needed
         runtime.GC()
     }
+}
+
+func isBlacklisted(ip string) bool {
+    _, blacklisted := ipBlacklist.Load(ip)
+    return blacklisted
+}
+
+func blacklistIP(ip string) {
+    ipBlacklist.Store(ip, struct{}{})
+}
+
+func checkProxy(ip string) (bool, error) {
+    url := fmt.Sprintf("http://ip-api.com/json/%s?fields=proxy", ip)
+    resp, err := http.Get(url)
+    if err != nil {
+        return false, err
+    }
+    defer resp.Body.Close()
+
+    var result IPAPIResponse
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return false, err
+    }
+
+    return result.Proxy, nil
 }
 
 func Initialize() *fiber.App {
@@ -81,11 +131,25 @@ func Initialize() *fiber.App {
             if config.Logger {
                 logger.Infof("IP %s is rate limited", c.IP())
             }
+            blacklistIP(c.IP())
             return c.Status(fiber.StatusTooManyRequests).SendString("Too many requests, please try again later.")
         },
     }))
 
     app.Use(func(c *fiber.Ctx) error {
+        if isBlacklisted(c.IP()) {
+            return c.Status(fiber.StatusForbidden).SendString("Your IP has been blacklisted due to suspicious activity.")
+        }
+
+        isProxy, err := checkProxy(c.IP())
+        if err != nil {
+            logger.Error("Error checking proxy:", err)
+            return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
+        }
+        if isProxy {
+            return c.Status(fiber.StatusForbidden).SendString("Access denied: Proxy detected")
+        }
+
         atomic.AddUint64(&requestCount, 1)
         atomic.AddUint64(&bytesReceived, uint64(len(c.Body())))
         updateConsoleTitle()
