@@ -8,6 +8,7 @@ import (
     "net"
     "os"
     "path/filepath"
+    "runtime"
     "strings"
     "sync/atomic"
     "syscall"
@@ -25,7 +26,7 @@ import (
 )
 
 var (
-    requestCount uint64
+    requestCount  uint64
     bytesReceived uint64
 )
 
@@ -40,15 +41,22 @@ func updateConsoleTitle() {
     setConsoleTitle(title)
 }
 
+func triggerGarbageCollection() {
+    for {
+        time.Sleep(1 * time.Minute) // Adjust the interval as needed
+        runtime.GC()
+    }
+}
+
 func Initialize() *fiber.App {
     logger.Info("Initializing HTTP Server")
 
     app := fiber.New(fiber.Config{
         DisableStartupMessage: true,
         BodyLimit:             512 * 1024, // 512KB of body limit
-        IdleTimeout:           30 * time.Second,
-        ReadTimeout:           30 * time.Second,
-        WriteTimeout:          30 * time.Second,
+        IdleTimeout:           10 * time.Second,
+        ReadTimeout:           10 * time.Second,
+        WriteTimeout:          10 * time.Second,
     })
 
     config := config.GetConfig()
@@ -134,60 +142,52 @@ func Initialize() *fiber.App {
 
     app.Use(func(c *fiber.Ctx) error {
         if strings.HasPrefix(c.Path(), "/cache") {
-            go func() {
-                logger.Info("Connection from: " + c.IP() + " | Getting: " + c.Path())
+            pathname := filepath.Join("./cache", c.Path())
 
-                pathname := filepath.Join("./cache", c.Path())
+            if config.ServerCdn == "default" {
+                config.ServerCdn = "0098/5858486/"
+            }
 
-                if config.ServerCdn == "default" {
-                    config.ServerCdn = "0098/5858486/"
-                }
+            if _, err := os.Stat(pathname); os.IsNotExist(err) {
+                c.Redirect(
+                    fmt.Sprintf("https://ubistatic-a.akamaihd.net/%s%s", config.ServerCdn, c.Path()),
+                    fiber.StatusMovedPermanently,
+                )
 
-                if _, err := os.Stat(pathname); os.IsNotExist(err) {
-                    c.Redirect(
-                        fmt.Sprintf("https://ubistatic-a.akamaihd.net/%s%s", config.ServerCdn, c.Path()),
-                        fiber.StatusMovedPermanently,
-                    )
+                logger.Info("Connection from: " + c.IP() + " | Fetching file from CDN: " + c.Path())
+                return nil
+            }
 
-                    logger.Info("Connection from: " + c.IP() + " | Fetching file from CDN: " + c.Path())
+            file, err := os.Open(pathname)
+            if err != nil {
+                return c.Status(fiber.StatusNotFound).SendString("error from loading")
+            }
+            defer file.Close()
 
-                    return
-                }
+            buffer, err := io.ReadAll(file)
+            if err != nil {
+                return c.Status(fiber.StatusNotFound).SendString("error")
+            }
 
-                file, err := os.Open(pathname)
-                if err != nil {
-                    c.Status(fiber.StatusNotFound).SendString("error from loading")
-                    return
-                }
-                defer file.Close()
+            contentTypes := map[string]string{
+                ".ico":  "image/x-icon",
+                ".html": "text/html",
+                ".js":   "text/javascript",
+                ".json": "application/json",
+                ".css":  "text/css",
+                ".png":  "image/png",
+                ".jpg":  "image/jpeg",
+                ".wav":  "audio/wav",
+                ".mp3":  "audio/mpeg",
+                ".svg":  "image/svg+xml",
+                ".pdf":  "application/pdf",
+                ".doc":  "application/msword",
+            }
 
-                buffer, err := io.ReadAll(file)
-                if err != nil {
-                    c.Status(fiber.StatusNotFound).SendString("error")
-                    return
-                }
+            ext := filepath.Ext(c.Path())
+            c.Set("Content-Type", contentTypes[ext])
 
-                contentTypes := map[string]string{
-                    ".ico":  "image/x-icon",
-                    ".html": "text/html",
-                    ".js":   "text/javascript",
-                    ".json": "application/json",
-                    ".css":  "text/css",
-                    ".png":  "image/png",
-                    ".jpg":  "image/jpeg",
-                    ".wav":  "audio/wav",
-                    ".mp3":  "audio/mpeg",
-                    ".svg":  "image/svg+xml",
-                    ".pdf":  "application/pdf",
-                    ".doc":  "application/msword",
-                }
-
-                ext := filepath.Ext(c.Path())
-                c.Set("Content-Type", contentTypes[ext])
-
-                c.Send(buffer)
-            }()
-            return nil
+            return c.Send(buffer)
         }
         return c.Next()
     })
@@ -221,6 +221,8 @@ func Initialize() *fiber.App {
     app.Use(func(c *fiber.Ctx) error {
         return c.Status(fiber.StatusNotFound).SendString("404 Not Found")
     })
+
+    go triggerGarbageCollection()
 
     return app
 }
