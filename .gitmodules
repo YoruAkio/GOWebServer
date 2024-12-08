@@ -1,0 +1,3 @@
+[submodule "mmdb/GOWebServer-Depedencies"]
+	path = mmdb/GOWebServer-Depedencies
+	url = https://codeberg.org/Vo/GOWebServer-Depedencies.git
