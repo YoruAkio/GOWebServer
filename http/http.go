@@ -9,7 +9,10 @@ import (
     "os"
     "path/filepath"
     "strings"
+    "sync/atomic"
+    "syscall"
     "time"
+    "unsafe"
 
     "github.com/gofiber/fiber/v2"
     "github.com/gofiber/fiber/v2/middleware/compress"
@@ -21,12 +24,28 @@ import (
     "github.com/yoruakio/gowebserver/logger"
 )
 
+var (
+    requestCount uint64
+    bytesReceived uint64
+)
+
+func setConsoleTitle(title string) {
+    kernel32, _ := syscall.LoadLibrary("kernel32.dll")
+    setConsoleTitle, _ := syscall.GetProcAddress(kernel32, "SetConsoleTitleW")
+    syscall.Syscall(setConsoleTitle, 1, uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(title))), 0, 0)
+}
+
+func updateConsoleTitle() {
+    title := fmt.Sprintf("GOWebServer by YoruAkio | Requests: %d, Bytes: %d", atomic.LoadUint64(&requestCount), atomic.LoadUint64(&bytesReceived))
+    setConsoleTitle(title)
+}
+
 func Initialize() *fiber.App {
     logger.Info("Initializing HTTP Server")
 
     app := fiber.New(fiber.Config{
         DisableStartupMessage: true,
-		BodyLimit:             512 * 1024, // 512KB of body limit
+        BodyLimit:             512 * 1024, // 512KB of body limit
         IdleTimeout:           30 * time.Second,
         ReadTimeout:           30 * time.Second,
         WriteTimeout:          30 * time.Second,
@@ -57,6 +76,13 @@ func Initialize() *fiber.App {
             return c.Status(fiber.StatusTooManyRequests).SendString("Too many requests, please try again later.")
         },
     }))
+
+    app.Use(func(c *fiber.Ctx) error {
+        atomic.AddUint64(&requestCount, 1)
+        atomic.AddUint64(&bytesReceived, uint64(len(c.Body())))
+        updateConsoleTitle()
+        return c.Next()
+    })
 
     app.Use(func(c *fiber.Ctx) error {
         if !config.EnableGeo {
@@ -112,7 +138,7 @@ func Initialize() *fiber.App {
                 logger.Info("Connection from: " + c.IP() + " | Getting: " + c.Path())
 
                 pathname := filepath.Join("./cache", c.Path())
-                
+
                 if config.ServerCdn == "default" {
                     config.ServerCdn = "0098/5858486/"
                 }
@@ -123,8 +149,8 @@ func Initialize() *fiber.App {
                         fiber.StatusMovedPermanently,
                     )
 
-					logger.Info("Connection from: " + c.IP() + " | Fetching file from CDN: " + c.Path())
-					
+                    logger.Info("Connection from: " + c.IP() + " | Fetching file from CDN: " + c.Path())
+
                     return
                 }
 
