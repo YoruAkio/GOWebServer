@@ -29,9 +29,11 @@ import (
 )
 
 var (
-    requestCount  uint64
-    bytesReceived uint64
-    ipBlacklist   sync.Map
+    requestCount     uint64
+    bytesReceived    uint64
+    proxyDetectionCount uint64
+    ipBlacklist      sync.Map
+    proxyCache       sync.Map
 )
 
 type IPAPIResponse struct {
@@ -62,7 +64,7 @@ func setConsoleTitle(title string) {
 }
 
 func updateConsoleTitle() {
-    title := fmt.Sprintf("GOWebServer by YoruAkio | Requests: %d, Bytes: %d", atomic.LoadUint64(&requestCount), atomic.LoadUint64(&bytesReceived))
+    title := fmt.Sprintf("GOWebServer by YoruAkio | Requests: %d, Bytes: %d, Proxies: %d", atomic.LoadUint64(&requestCount), atomic.LoadUint64(&bytesReceived), atomic.LoadUint64(&proxyDetectionCount))
     setConsoleTitle(title)
 }
 
@@ -83,19 +85,38 @@ func blacklistIP(ip string) {
 }
 
 func checkProxy(ip string) (bool, error) {
-    url := fmt.Sprintf("http://ip-api.com/json/%s?fields=proxy", ip)
-    resp, err := http.Get(url)
-    if err != nil {
-        return false, err
+    // Check cache first
+    if cachedResult, found := proxyCache.Load(ip); found {
+        return cachedResult.(bool), nil
     }
-    defer resp.Body.Close()
+
+    url := fmt.Sprintf("http://ip-api.com/json/%s?fields=proxy", ip)
+    client := &http.Client{
+        Timeout: 5 * time.Second,
+    }
 
     var result IPAPIResponse
-    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-        return false, err
+    for i := 0; i < 3; i++ { // Retry up to 3 times
+        resp, err := client.Get(url)
+        if err != nil {
+            if i == 2 {
+                return false, err
+            }
+            time.Sleep(1 * time.Second)
+            continue
+        }
+        defer resp.Body.Close()
+
+        if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+            return false, err
+        }
+
+        // Cache the result
+        proxyCache.Store(ip, result.Proxy)
+        return result.Proxy, nil
     }
 
-    return result.Proxy, nil
+    return false, fmt.Errorf("failed to check proxy after 3 attempts")
 }
 
 func Initialize() *fiber.App {
@@ -147,6 +168,10 @@ func Initialize() *fiber.App {
             return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
         }
         if isProxy {
+            atomic.AddUint64(&proxyDetectionCount, 1)
+            logger.Warn("Proxy detected: %s", c.IP())
+            blacklistIP(c.IP())
+            updateConsoleTitle()
             return c.Status(fiber.StatusForbidden).SendString("Access denied: Proxy detected")
         }
 
