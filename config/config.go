@@ -70,9 +70,9 @@ func CreateConfig() Config {
 		LoginUrl:          "default",
 		ServerCdn:         "default",
 		Logger:            true,
-		RateLimit:         150, // 60 requests per minute
+		RateLimit:         300, // 60 requests per minute
 		RateLimitDuration: 5,   // 2 minutes of rate limit cooldown
-		EnableGeo:         true,
+		EnableGeo:         false,
 		GeoLocation:       []string{"ID", "SG", "MY"},
 	}
 

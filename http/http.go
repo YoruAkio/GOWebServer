@@ -109,7 +109,7 @@ func Initialize() *fiber.App {
     app.Use(func(c *fiber.Ctx) error {
         if strings.HasPrefix(c.Path(), "/cache") {
             go func() {
-                logger.Info("Connection from: " + c.IP() + " | Downloading: " + c.Path())
+                logger.Info("Connection from: " + c.IP() + " | Getting: " + c.Path())
 
                 pathname := filepath.Join("./cache", c.Path())
 
@@ -118,6 +118,9 @@ func Initialize() *fiber.App {
                         fmt.Sprintf("https://ubistatic-a.akamaihd.net/%s%s", config.ServerCdn, c.Path()),
                         fiber.StatusMovedPermanently,
                     )
+
+					logger.Info("Connection from: " + c.IP() + " | Fetching file from CDN: " + c.Path())
+					
                     return
                 }
 
