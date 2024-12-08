@@ -67,11 +67,11 @@ func CreateConfig() Config {
 	config := Config{
 		Host:              "127.0.0.1",
 		Port:              "17091",
-		LoginUrl:          "default",
-		ServerCdn:         "default",
+		LoginUrl:          "default", // default login url is private.yoruakio.tech
+		ServerCdn:         "default", // default cdn is 
 		Logger:            true,
-		RateLimit:         300, // 60 requests per minute
-		RateLimitDuration: 5,   // 2 minutes of rate limit cooldown
+		RateLimit:         300, // 300 requests per minute( default )
+		RateLimitDuration: 5,   // 5 minutes of rate limit cooldown ( default )
 		EnableGeo:         false,
 		GeoLocation:       []string{"ID", "SG", "MY"},
 	}

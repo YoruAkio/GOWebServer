@@ -23,7 +23,8 @@ Building the server is simple, just run the following command:
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yoruakio/GOWebServer.git
+# Clone the repository and its submodules for the requirements of geo location detection
+git clone https://github.com/yoruakio/GOWebServer.git --recursive
 ```
 
 2. Build the server:
@@ -52,10 +53,10 @@ The server can be configured using the `config.json` file. The following are the
     "serverCdn": "", // Growtopia CDN to handle missing files
     "loginUrl": "gtlogin-backend.vercel.app", // URI for client login
     "isLogging": false,
-    "rateLimit": 150,
+    "rateLimit": 300,
     "rateLimitDuration": 5,
-    "enableGeo": true,
-    "trustedRegions": [
+    "enableGeo": false, // Enable Geo Location blocking
+    "trustedRegions": [ // List of trusted regions that allow access to the server
         "ID",
         "SG",
         "MY"

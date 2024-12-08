@@ -112,6 +112,10 @@ func Initialize() *fiber.App {
                 logger.Info("Connection from: " + c.IP() + " | Getting: " + c.Path())
 
                 pathname := filepath.Join("./cache", c.Path())
+                
+                if config.ServerCdn == "default" {
+                    config.ServerCdn = "0098/5858486/"
+                }
 
                 if _, err := os.Stat(pathname); os.IsNotExist(err) {
                     c.Redirect(
@@ -169,7 +173,7 @@ func Initialize() *fiber.App {
     meta := fmt.Sprintf("K10WA_%d", rand.Intn(9000)+1000)
     loginUrl := config.LoginUrl
     if loginUrl == "default" {
-        loginUrl = config.Host
+        loginUrl = "private.yoruakio.tech" // default login url that i built for public use
     }
     content := fmt.Sprintf(
         "server|%s\n"+
