@@ -1,6 +1,6 @@
 module github.com/yoruakio/gowebserver
 
-go 1.22.5
+go 1.23
 
 require (
 	github.com/gofiber/fiber/v2 v2.52.5
