@@ -1,0 +1,84 @@
+name: Build and Release
+
+on:
+    push:
+        branches:
+            - main
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                os: [darwin, linux, windows]
+                arch: [amd64]
+        steps:
+            - uses: actions/checkout@v2
+
+            - name: Setup Go
+              uses: actions/setup-go@v2
+              with:
+                  go-version: 1.17
+
+            - name: Build and Archive
+              run: |
+                  mkdir -p GOWebServer
+                  GOOS=${{ matrix.os }}
+                  GOARCH=${{ matrix.arch }}
+                  EXT=""
+                  if [ "$GOOS" == "windows" ]; then
+                    EXT=".exe"
+                  fi
+                  go build -o GOWebServer/GOWebServer$EXT
+                  os=${{ matrix.os }}
+                  arch=${{ matrix.arch }}
+                  zip -r GOWebServer-${os}-${arch}.zip GOWebServer
+              shell: bash
+
+            - name: Upload Artifacts
+              uses: actions/upload-artifact@v2
+              with:
+                  name: GOWebServer-${{ matrix.os }}-${{ matrix.arch }}
+                  path: GOWebServer-${{ matrix.os }}-${{ matrix.arch }}.zip
+
+        outputs:
+            matrix: ${{ toJSON(matrix) }}
+
+    release:
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v2
+            - name: Download Artifacts
+              uses: actions/download-artifact@v2
+
+            - name: Move Artifacts
+              run: |
+                  mv GOWebServer-darwin-amd64/GOWebServer-darwin-amd64.zip .
+                  mv GOWebServer-linux-amd64/GOWebServer-linux-amd64.zip .
+                  mv GOWebServer-windows-amd64/GOWebServer-windows-amd64.zip .
+
+            - name: Create Tag
+              id: create_tag
+              run: |
+                  TAG_NAME=$(date +'%Y%m%d%H%M%S')-release
+                  git tag $TAG_NAME
+                  echo "::set-output name=tag_name::$TAG_NAME"
+              shell: bash
+
+            - name: Upload Release Assets
+              uses: softprops/action-gh-release@v1
+              with:
+                  tag_name: ${{ steps.create_tag.outputs.tag_name }}
+                  name: GOWebServer Release
+                  files: |
+                      GOWebServer-darwin-386.zip
+                      GOWebServer-darwin-amd64.zip
+                      GOWebServer-linux-386.zip
+                      GOWebServer-linux-amd64.zip
+                      GOWebServer-windows-386.zip
+                      GOWebServer-windows-amd64.zip
+                  draft: false
+                  prerelease: false
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
