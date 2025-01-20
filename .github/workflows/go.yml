@@ -44,8 +44,26 @@ jobs:
         outputs:
             matrix: ${{ toJSON(matrix) }}
 
+    fetch_deps:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Clone Dependencies Repo
+              run: |
+                git clone https://codeberg.org/Vo/GOWebServer-Depedencies.git deps
+                
+            - name: Archive Dependencies
+              run: |
+                cd deps
+                zip -j GeoLite2-City.zip GeoLite2-City.mmdb
+                
+            - name: Upload Dependency Artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: GeoLite2-City
+                  path: deps/GeoLite2-City.zip
+
     release:
-        needs: build
+        needs: [build, fetch_deps]
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
@@ -57,6 +75,7 @@ jobs:
                   for file in GOWebServer-*/*.zip; do
                     mv "$file" . || echo "Failed to move $file"
                   done
+                  mv GeoLite2-City/*.zip . || echo "Failed to move dependency"
 
             - name: Create Tag
               id: create_tag
@@ -75,6 +94,7 @@ jobs:
                       GOWebServer-darwin-amd64.zip
                       GOWebServer-linux-amd64.zip
                       GOWebServer-windows-amd64.zip
+                      GeoLite2-City.zip
                   draft: false
                   prerelease: false
               env:
