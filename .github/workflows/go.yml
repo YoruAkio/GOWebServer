@@ -80,10 +80,10 @@ jobs:
             - name: Create Tag
               id: create_tag
               run: |
-                  UNIQUE_CODE=$(date +'%Y%m%d%H%M%S')-$(openssl rand -hex 6)
+                  UNIQUE_CODE=$(openssl rand -hex 3)
                   TAG_NAME="releases-${UNIQUE_CODE}"
                   git tag $TAG_NAME
-                  echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+                  echo "tag_name=${UNIQUE_CODE}" >> $GITHUB_OUTPUT
               shell: bash
 
             - name: Upload Release Assets
