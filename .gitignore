@@ -2,6 +2,13 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 
+# GTPS Cache folder
+cache/cache
+cache/game
+cache/audio
+cache/interface
+cache/items.dat
+
 # Dev folder
 dev/
 

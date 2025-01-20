@@ -13,6 +13,7 @@ type Config struct {
 	Port     string `json:"port"`
 	LoginUrl string `json:"loginUrl"`
 	ServerCdn string `json:"serverCdn"`
+	ServerMeta string `json:'serverMeta'`
 
 	// Logger Configuration
 	Logger bool `json:"isLogging"`

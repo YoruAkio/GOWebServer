@@ -5,7 +5,7 @@ import (
     "fmt"
     "io"
     "log"
-    "math/rand"
+    // "math/rand"
     "net"
     "net/http"
     "os"
@@ -14,9 +14,9 @@ import (
     "strings"
     "sync"
     "sync/atomic"
-    "syscall"
+    // "syscall"
     "time"
-    "unsafe"
+    // "unsafe"
 
     "github.com/gofiber/fiber/v2"
     "github.com/gofiber/fiber/v2/middleware/compress"
@@ -57,16 +57,16 @@ type IPAPIResponse struct {
     Hosting      bool   `json:"hosting"`
 }
 
-func setConsoleTitle(title string) {
-    kernel32, _ := syscall.LoadLibrary("kernel32.dll")
-    setConsoleTitle, _ := syscall.GetProcAddress(kernel32, "SetConsoleTitleW")
-    syscall.Syscall(setConsoleTitle, 1, uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(title))), 0, 0)
-}
+// func setConsoleTitle(title string) {
+//     kernel32, _ := syscall.LoadLibrary("kernel32.dll")
+//     setConsoleTitle, _ := syscall.GetProcAddress(kernel32, "SetConsoleTitleW")
+//     syscall.Syscall(setConsoleTitle, 1, uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(title))), 0, 0)
+// }
 
-func updateConsoleTitle() {
-    title := fmt.Sprintf("GOWebServer by YoruAkio | Requests: %d, Bytes: %d, Proxies: %d", atomic.LoadUint64(&requestCount), atomic.LoadUint64(&bytesReceived), atomic.LoadUint64(&proxyDetectionCount))
-    setConsoleTitle(title)
-}
+// func updateConsoleTitle() {
+//     title := fmt.Sprintf("GOWebServer by YoruAkio | Requests: %d, Bytes: %d, Proxies: %d", atomic.LoadUint64(&requestCount), atomic.LoadUint64(&bytesReceived), atomic.LoadUint64(&proxyDetectionCount))
+//     setConsoleTitle(title)
+// }
 
 func triggerGarbageCollection() {
     for {
@@ -171,13 +171,13 @@ func Initialize() *fiber.App {
             atomic.AddUint64(&proxyDetectionCount, 1)
             logger.Warn("Proxy detected: %s", c.IP())
             blacklistIP(c.IP())
-            updateConsoleTitle()
+            // updateConsoleTitle()
             return c.Status(fiber.StatusForbidden).SendString("Access denied: Proxy detected")
         }
 
-        atomic.AddUint64(&requestCount, 1)
-        atomic.AddUint64(&bytesReceived, uint64(len(c.Body())))
-        updateConsoleTitle()
+        // atomic.AddUint64(&requestCount, 1)
+        // atomic.AddUint64(&bytesReceived, uint64(len(c.Body())))
+        // updateConsoleTitle()
         return c.Next()
     })
 
@@ -285,7 +285,11 @@ func Initialize() *fiber.App {
         return c.SendString("Hello, World!")
     })
 
-    meta := fmt.Sprintf("K10WA_%d", rand.Intn(9000)+1000)
+    meta := config.ServerMeta
+    if meta == "" {
+        meta = "default"
+    }
+
     loginUrl := config.LoginUrl
     if loginUrl == "default" {
         loginUrl = "private.yoruakio.tech" // default login url that i built for public use
