@@ -80,7 +80,7 @@ jobs:
             - name: Create Tag
               id: create_tag
               run: |
-                  UNIQUE_CODE=$(date +'%Y%m%d%H%M%S')-$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1)
+                  UNIQUE_CODE=$(date +'%Y%m%d%H%M%S')-$(openssl rand -hex 6)
                   TAG_NAME="releases-${UNIQUE_CODE}"
                   git tag $TAG_NAME
                   echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
