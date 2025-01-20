@@ -13,7 +13,6 @@ cache/items.dat
 dev/
 
 # Configuration files
-*.yml
 *.yaml
 *.json
 
