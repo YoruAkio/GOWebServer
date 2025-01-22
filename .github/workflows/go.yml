@@ -24,11 +24,12 @@ jobs:
               run: |
                   mkdir -p GOWebServer
                   GOOS=${{ matrix.os }}
-                  GOARCH=${{ matrix.arch }}
+                  GOARCH=amd64
                   EXT=""
                   if [ "$GOOS" == "windows" ]; then
                     EXT=".exe"
                   fi
+                  go clean
                   go build -o GOWebServer/GOWebServer$EXT
                   os=${{ matrix.os }}
                   arch=${{ matrix.arch }}
