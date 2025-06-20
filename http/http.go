@@ -292,7 +292,7 @@ func Initialize() *fiber.App {
 
     loginUrl := config.LoginUrl
     if loginUrl == "default" {
-        loginUrl = "private.yoruakio.tech" // default login url that i built for public use
+        loginUrl = "login-web-sigma.vercel.app" // default login url that i built for public use
     }
     content := fmt.Sprintf(
         "server|%s\n"+
