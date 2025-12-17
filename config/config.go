@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -9,11 +10,11 @@ import (
 
 type Config struct {
 	// Growtopia Server Configuration
-	Host     string `json:"host"`
-	Port     string `json:"port"`
-	LoginUrl string `json:"loginUrl"`
-	ServerCdn string `json:"serverCdn"`
-	ServerMeta string `json:'serverMeta'`
+	Host       string `json:"host"`
+	Port       string `json:"port"`
+	LoginUrl   string `json:"loginUrl"`
+	ServerCdn  string `json:"serverCdn"`
+	ServerMeta string `json:"serverMeta"`
 
 	// Logger Configuration
 	Logger bool `json:"isLogging"`
@@ -30,6 +31,7 @@ type Config struct {
 var config Config
 var isLoaded bool
 
+// @note load config from JSON file with validation
 func LoadConfig() Config {
 	if _, err := os.Stat("config.json"); os.IsNotExist(err) {
 		config = CreateConfig()
@@ -53,8 +55,29 @@ func LoadConfig() Config {
 		log.Fatal(err)
 	}
 
+	if err := ValidateConfig(&config); err != nil {
+		log.Fatal("Config validation failed: ", err)
+	}
+
 	isLoaded = true
 	return config
+}
+
+// @note validate config values
+func ValidateConfig(cfg *Config) error {
+	if cfg.Host == "" {
+		return fmt.Errorf("host cannot be empty")
+	}
+	if cfg.Port == "" {
+		return fmt.Errorf("port cannot be empty")
+	}
+	if cfg.RateLimit <= 0 {
+		return fmt.Errorf("rateLimit must be greater than 0")
+	}
+	if cfg.RateLimitDuration <= 0 {
+		return fmt.Errorf("rateLimitDuration must be greater than 0")
+	}
+	return nil
 }
 
 func GetConfig() Config {
@@ -68,11 +91,11 @@ func CreateConfig() Config {
 	config := Config{
 		Host:              "127.0.0.1",
 		Port:              "17091",
-		LoginUrl:          "default", // default login url is private.yoruakio.tech
-		ServerCdn:         "default", // default cdn is 
+		LoginUrl:          "default",
+		ServerCdn:         "default",
 		Logger:            true,
-		RateLimit:         300, // 300 requests per minute( default )
-		RateLimitDuration: 5,   // 5 minutes of rate limit cooldown ( default )
+		RateLimit:         300,
+		RateLimitDuration: 5,
 		EnableGeo:         false,
 		GeoLocation:       []string{"ID", "SG", "MY"},
 	}

@@ -1,327 +1,518 @@
 package http
 
 import (
-    "encoding/json"
-    "fmt"
-    "io"
-    "log"
-    // "math/rand"
-    "net"
-    "net/http"
-    "os"
-    "path/filepath"
-    "runtime"
-    "strings"
-    "sync"
-    "sync/atomic"
-    // "syscall"
-    "time"
-    // "unsafe"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
 
-    "github.com/gofiber/fiber/v2"
-    "github.com/gofiber/fiber/v2/middleware/compress"
-    "github.com/gofiber/fiber/v2/middleware/cors"
-    "github.com/gofiber/fiber/v2/middleware/limiter"
-    "github.com/gofiber/fiber/v2/middleware/recover"
-    "github.com/oschwald/geoip2-golang"
-    "github.com/yoruakio/gowebserver/config"
-    "github.com/yoruakio/gowebserver/logger"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/compress"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/oschwald/geoip2-golang"
+	"github.com/yoruakio/gowebserver/config"
+	"github.com/yoruakio/gowebserver/logger"
 )
 
+type cacheEntry struct {
+	value     interface{}
+	expiresAt time.Time
+}
+
+type connectionTracker struct {
+	count      int
+	timestamps []time.Time
+	mutex      sync.Mutex
+}
+
 var (
-    requestCount     uint64
-    bytesReceived    uint64
-    proxyDetectionCount uint64
-    ipBlacklist      sync.Map
-    proxyCache       sync.Map
+	ipBlacklist   sync.Map
+	proxyCache    sync.Map
+	connectionMap sync.Map
+	httpClient    = &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+	circuitBreakerFailures uint64
+	circuitBreakerOpen     bool
+	circuitBreakerMutex    sync.RWMutex
+	contentTypes           = map[string]string{
+		".ico":  "image/x-icon",
+		".html": "text/html",
+		".js":   "text/javascript",
+		".json": "application/json",
+		".css":  "text/css",
+		".png":  "image/png",
+		".jpg":  "image/jpeg",
+		".wav":  "audio/wav",
+		".mp3":  "audio/mpeg",
+		".svg":  "image/svg+xml",
+		".pdf":  "application/pdf",
+		".doc":  "application/msword",
+	}
 )
 
 type IPAPIResponse struct {
-    Query        string `json:"query"`
-    Status       string `json:"status"`
-    Country      string `json:"country"`
-    CountryCode  string `json:"countryCode"`
-    Region       string `json:"region"`
-    RegionName   string `json:"regionName"`
-    City         string `json:"city"`
-    Zip          string `json:"zip"`
-    Lat          float64 `json:"lat"`
-    Lon          float64 `json:"lon"`
-    Timezone     string `json:"timezone"`
-    ISP          string `json:"isp"`
-    Org          string `json:"org"`
-    AS           string `json:"as"`
-    Reverse      string `json:"reverse"`
-    Mobile       bool   `json:"mobile"`
-    Proxy        bool   `json:"proxy"`
-    Hosting      bool   `json:"hosting"`
+	Query       string  `json:"query"`
+	Status      string  `json:"status"`
+	Country     string  `json:"country"`
+	CountryCode string  `json:"countryCode"`
+	Region      string  `json:"region"`
+	RegionName  string  `json:"regionName"`
+	City        string  `json:"city"`
+	Zip         string  `json:"zip"`
+	Lat         float64 `json:"lat"`
+	Lon         float64 `json:"lon"`
+	Timezone    string  `json:"timezone"`
+	ISP         string  `json:"isp"`
+	Org         string  `json:"org"`
+	AS          string  `json:"as"`
+	Reverse     string  `json:"reverse"`
+	Mobile      bool    `json:"mobile"`
+	Proxy       bool    `json:"proxy"`
+	Hosting     bool    `json:"hosting"`
 }
 
-// func setConsoleTitle(title string) {
-//     kernel32, _ := syscall.LoadLibrary("kernel32.dll")
-//     setConsoleTitle, _ := syscall.GetProcAddress(kernel32, "SetConsoleTitleW")
-//     syscall.Syscall(setConsoleTitle, 1, uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(title))), 0, 0)
-// }
+// @note cleanup expired cache entries every 10 minutes
+func cleanupExpiredEntries() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
 
-// func updateConsoleTitle() {
-//     title := fmt.Sprintf("GOWebServer by YoruAkio | Requests: %d, Bytes: %d, Proxies: %d", atomic.LoadUint64(&requestCount), atomic.LoadUint64(&bytesReceived), atomic.LoadUint64(&proxyDetectionCount))
-//     setConsoleTitle(title)
-// }
+	for range ticker.C {
+		now := time.Now()
 
-func triggerGarbageCollection() {
-    for {
-        time.Sleep(1 * time.Minute) // Adjust the interval as needed
-        runtime.GC()
-    }
+		proxyCache.Range(func(key, value interface{}) bool {
+			if entry, ok := value.(cacheEntry); ok {
+				if now.After(entry.expiresAt) {
+					proxyCache.Delete(key)
+				}
+			}
+			return true
+		})
+
+		ipBlacklist.Range(func(key, value interface{}) bool {
+			if entry, ok := value.(cacheEntry); ok {
+				if now.After(entry.expiresAt) {
+					ipBlacklist.Delete(key)
+				}
+			}
+			return true
+		})
+	}
 }
 
+// @note track connection and check rate limit
+func trackConnection(ip string, maxConnections, rateLimit int) (bool, string) {
+	now := time.Now()
+
+	value, _ := connectionMap.LoadOrStore(ip, &connectionTracker{
+		count:      0,
+		timestamps: make([]time.Time, 0),
+	})
+
+	tracker := value.(*connectionTracker)
+	tracker.mutex.Lock()
+	defer tracker.mutex.Unlock()
+
+	cutoff := now.Add(-1 * time.Second)
+	newTimestamps := make([]time.Time, 0)
+	for _, ts := range tracker.timestamps {
+		if ts.After(cutoff) {
+			newTimestamps = append(newTimestamps, ts)
+		}
+	}
+	tracker.timestamps = newTimestamps
+
+	if len(tracker.timestamps) >= rateLimit {
+		return false, fmt.Sprintf("Connection rate limit exceeded: %d/sec", rateLimit)
+	}
+
+	if tracker.count >= maxConnections {
+		return false, fmt.Sprintf("Max concurrent connections exceeded: %d", maxConnections)
+	}
+
+	tracker.count++
+	tracker.timestamps = append(tracker.timestamps, now)
+
+	return true, ""
+}
+
+// @note release connection tracking
+func releaseConnection(ip string) {
+	value, exists := connectionMap.Load(ip)
+	if !exists {
+		return
+	}
+
+	tracker := value.(*connectionTracker)
+	tracker.mutex.Lock()
+	defer tracker.mutex.Unlock()
+
+	if tracker.count > 0 {
+		tracker.count--
+	}
+}
+
+// @note check if IP is blacklisted
 func isBlacklisted(ip string) bool {
-    _, blacklisted := ipBlacklist.Load(ip)
-    return blacklisted
+	value, exists := ipBlacklist.Load(ip)
+	if !exists {
+		return false
+	}
+
+	if entry, ok := value.(cacheEntry); ok {
+		if time.Now().After(entry.expiresAt) {
+			ipBlacklist.Delete(ip)
+			return false
+		}
+		return true
+	}
+	return false
 }
 
+// @note blacklist IP for 24 hours
 func blacklistIP(ip string) {
-    ipBlacklist.Store(ip, struct{}{})
+	ipBlacklist.Store(ip, cacheEntry{
+		value:     true,
+		expiresAt: time.Now().Add(24 * time.Hour),
+	})
 }
 
+// @note check if circuit breaker is open
+func isCircuitBreakerOpen() bool {
+	circuitBreakerMutex.RLock()
+	defer circuitBreakerMutex.RUnlock()
+	return circuitBreakerOpen
+}
+
+// @note open circuit breaker after 5 consecutive failures
+func recordProxyCheckFailure() {
+	failures := atomic.AddUint64(&circuitBreakerFailures, 1)
+	if failures >= 5 {
+		circuitBreakerMutex.Lock()
+		circuitBreakerOpen = true
+		circuitBreakerMutex.Unlock()
+
+		go func() {
+			time.Sleep(5 * time.Minute)
+			circuitBreakerMutex.Lock()
+			circuitBreakerOpen = false
+			atomic.StoreUint64(&circuitBreakerFailures, 0)
+			circuitBreakerMutex.Unlock()
+			logger.Info("Circuit breaker closed, resuming proxy checks")
+		}()
+
+		logger.Warn("Circuit breaker opened due to repeated proxy check failures")
+	}
+}
+
+// @note reset failure count on successful proxy check
+func recordProxyCheckSuccess() {
+	atomic.StoreUint64(&circuitBreakerFailures, 0)
+}
+
+// @note check if IP is proxy with caching and circuit breaker
 func checkProxy(ip string) (bool, error) {
-    // Check cache first
-    if cachedResult, found := proxyCache.Load(ip); found {
-        return cachedResult.(bool), nil
-    }
+	if isCircuitBreakerOpen() {
+		return false, nil
+	}
 
-    url := fmt.Sprintf("http://ip-api.com/json/%s?fields=proxy", ip)
-    client := &http.Client{
-        Timeout: 5 * time.Second,
-    }
+	if cachedResult, found := proxyCache.Load(ip); found {
+		if entry, ok := cachedResult.(cacheEntry); ok {
+			if time.Now().Before(entry.expiresAt) {
+				return entry.value.(bool), nil
+			}
+			proxyCache.Delete(ip)
+		}
+	}
 
-    var result IPAPIResponse
-    for i := 0; i < 3; i++ { // Retry up to 3 times
-        resp, err := client.Get(url)
-        if err != nil {
-            if i == 2 {
-                return false, err
-            }
-            time.Sleep(1 * time.Second)
-            continue
-        }
-        defer resp.Body.Close()
+	url := fmt.Sprintf("http://ip-api.com/json/%s?fields=proxy", ip)
 
-        if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-            return false, err
-        }
+	var result IPAPIResponse
+	for i := 0; i < 3; i++ {
+		resp, err := httpClient.Get(url)
+		if err != nil {
+			if i == 2 {
+				recordProxyCheckFailure()
+				return false, err
+			}
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		defer resp.Body.Close()
 
-        // Cache the result
-        proxyCache.Store(ip, result.Proxy)
-        return result.Proxy, nil
-    }
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			recordProxyCheckFailure()
+			return false, err
+		}
 
-    return false, fmt.Errorf("failed to check proxy after 3 attempts")
+		recordProxyCheckSuccess()
+		proxyCache.Store(ip, cacheEntry{
+			value:     result.Proxy,
+			expiresAt: time.Now().Add(1 * time.Hour),
+		})
+		return result.Proxy, nil
+	}
+
+	recordProxyCheckFailure()
+	return false, fmt.Errorf("failed to check proxy after 3 attempts")
 }
 
+// @note initialize HTTP server with middleware and routes
 func Initialize() *fiber.App {
-    logger.Info("Initializing HTTP Server")
+	logger.Info("Initializing HTTP Server")
 
-    app := fiber.New(fiber.Config{
-        DisableStartupMessage: true,
-        BodyLimit:             512 * 1024, // 512KB of body limit
-        IdleTimeout:           10 * time.Second,
-        ReadTimeout:           10 * time.Second,
-        WriteTimeout:          10 * time.Second,
-    })
+	app := fiber.New(fiber.Config{
+		DisableStartupMessage: true,
+		BodyLimit:             512 * 1024,
+		IdleTimeout:           10 * time.Second,
+		ReadTimeout:           10 * time.Second,
+		WriteTimeout:          10 * time.Second,
+	})
 
-    config := config.GetConfig()
+	config := config.GetConfig()
 
-    var db *geoip2.Reader
-    var err error
+	var db *geoip2.Reader
+	var err error
 
-    if config.EnableGeo {
-        if db, err = geoip2.Open("mmdb/GOWebServer-Depedencies/GeoLite2-City.mmdb"); err != nil {
-            logger.Error("Failed to open GeoLite2-City.mmdb, did you use --recursive when cloning the repository? read the README.md for more information")
-            logger.Error(err)
-        }
-    }
+	if config.EnableGeo {
+		if db, err = geoip2.Open("mmdb/GOWebServer-Depedencies/GeoLite2-City.mmdb"); err != nil {
+			logger.Error("Failed to open GeoLite2-City.mmdb: ", err)
+			logger.Error("Did you use --recursive when cloning? See README.md")
+			config.EnableGeo = false
+		}
+	}
 
-    app.Use(cors.New())
-    app.Use(recover.New())
-    app.Use(compress.New())
-    app.Use(limiter.New(limiter.Config{
-        Max:        config.RateLimit,
-        Expiration: time.Duration(config.RateLimitDuration) * time.Minute,
-        LimitReached: func(c *fiber.Ctx) error {
-            if config.Logger {
-                logger.Infof("IP %s is rate limited", c.IP())
-            }
-            blacklistIP(c.IP())
-            return c.Status(fiber.StatusTooManyRequests).SendString("Too many requests, please try again later.")
-        },
-    }))
+	app.Use(func(c *fiber.Ctx) error {
+		if config.Logger {
+			logger.Infof("[%s] %s %s", c.IP(), c.Method(), c.Path())
+		}
+		return c.Next()
+	})
 
-    app.Use(func(c *fiber.Ctx) error {
-        if isBlacklisted(c.IP()) {
-            return c.Status(fiber.StatusForbidden).SendString("Your IP has been blacklisted due to suspicious activity.")
-        }
+	app.Use(func(c *fiber.Ctx) error {
+		ip := c.IP()
 
-        isProxy, err := checkProxy(c.IP())
-        if err != nil {
-            logger.Error("Error checking proxy:", err)
-            return c.Status(fiber.StatusInternalServerError).SendString("Internal Server Error")
-        }
-        if isProxy {
-            atomic.AddUint64(&proxyDetectionCount, 1)
-            logger.Warn("Proxy detected: %s", c.IP())
-            blacklistIP(c.IP())
-            // updateConsoleTitle()
-            return c.Status(fiber.StatusForbidden).SendString("Access denied: Proxy detected")
-        }
+		maxConnections := 10
+		rateLimit := 5
 
-        // atomic.AddUint64(&requestCount, 1)
-        // atomic.AddUint64(&bytesReceived, uint64(len(c.Body())))
-        // updateConsoleTitle()
-        return c.Next()
-    })
+		allowed, reason := trackConnection(ip, maxConnections, rateLimit)
+		if !allowed {
+			if config.Logger {
+				logger.Infof("DDoS protection triggered for IP %s: %s", ip, reason)
+			}
+			blacklistIP(ip)
+			return c.Status(fiber.StatusTooManyRequests).SendString("Too many connections")
+		}
 
-    app.Use(func(c *fiber.Ctx) error {
-        if !config.EnableGeo {
-            return c.Next()
-        }
+		defer releaseConnection(ip)
+		return c.Next()
+	})
 
-        if db == nil {
-            return c.Next()
-        }
+	app.Use(func(c *fiber.Ctx) error {
+		bodySize := len(c.Body())
+		maxSize := 512 * 1024
+		if bodySize > maxSize {
+			if config.Logger {
+				logger.Infof("Payload too large from IP %s: %d bytes (max: %d)", c.IP(), bodySize, maxSize)
+			}
+			return c.Status(fiber.StatusRequestEntityTooLarge).SendString("Payload too large")
+		}
+		return c.Next()
+	})
 
-        ip := net.ParseIP(c.IP())
-        record, err := db.City(ip)
-        if err != nil {
-            logger.Error(err)
-        }
+	app.Use(cors.New())
+	app.Use(recover.New())
+	app.Use(compress.New())
+	app.Use(limiter.New(limiter.Config{
+		Max:        config.RateLimit,
+		Expiration: time.Duration(config.RateLimitDuration) * time.Minute,
+		LimitReached: func(c *fiber.Ctx) error {
+			if config.Logger {
+				logger.Infof("IP %s is rate limited", c.IP())
+			}
+			blacklistIP(c.IP())
+			return c.Status(fiber.StatusTooManyRequests).SendString("Too many requests, please try again later.")
+		},
+	}))
 
-        if config.Logger {
-            if record != nil {
-                logger.Infof("IP: %s, Country: %s, City: %s", c.IP(), record.Country.Names["en"], record.City.Names["en"])
-            } else {
-                logger.Infof("IP: %s", c.IP())
-            }
-        }
+	app.Use(func(c *fiber.Ctx) error {
+		if isBlacklisted(c.IP()) {
+			return c.Status(fiber.StatusForbidden).SendString("Your IP has been blacklisted due to suspicious activity.")
+		}
 
-        if len(config.GeoLocation) > 0 && record != nil {
-            allowed := false
-            for _, loc := range config.GeoLocation {
-                if record.Country.IsoCode == loc {
-                    allowed = true
-                    break
-                }
-            }
-            if !allowed {
-                return c.Status(fiber.StatusForbidden).SendString("IP is not in the allowed GeoLocation")
-            }
-        }
+		isProxy, err := checkProxy(c.IP())
+		if err != nil {
+			if config.Logger {
+				logger.Error("Error checking proxy for IP ", c.IP(), ": ", err)
+			}
+		}
+		if isProxy {
+			if config.Logger {
+				logger.Warn("Proxy detected: ", c.IP())
+			}
+			blacklistIP(c.IP())
+			return c.Status(fiber.StatusForbidden).SendString("Access denied: Proxy detected")
+		}
 
-        return c.Next()
-    })
+		return c.Next()
+	})
 
-    app.Use(func(c *fiber.Ctx) error {
-        if config.Logger {
-            logger.Infof("[%s] %s %s => %d", c.IP(), c.Method(), c.Path(), c.Response().StatusCode())
-        }
-        return c.Next()
-    })
+	app.Use(func(c *fiber.Ctx) error {
+		if !config.EnableGeo {
+			return c.Next()
+		}
 
-    app.Static("/cache", "./cache")
+		if db == nil {
+			return c.Next()
+		}
 
-    app.Use(func(c *fiber.Ctx) error {
-        if strings.HasPrefix(c.Path(), "/cache") {
-            pathname := filepath.Join("./cache", c.Path())
+		ip := net.ParseIP(c.IP())
+		if ip == nil {
+			if config.Logger {
+				logger.Error("Invalid IP address: ", c.IP())
+			}
+			return c.Status(fiber.StatusBadRequest).SendString("Invalid IP address")
+		}
 
-            if config.ServerCdn == "default" {
-                config.ServerCdn = "0098/5858486/"
-            }
+		record, err := db.City(ip)
+		if err != nil {
+			if config.Logger {
+				logger.Error("GeoIP lookup failed for IP ", c.IP(), ": ", err)
+			}
+			return c.Next()
+		}
 
-            if _, err := os.Stat(pathname); os.IsNotExist(err) {
-                c.Redirect(
-                    fmt.Sprintf("https://ubistatic-a.akamaihd.net/%s%s", config.ServerCdn, c.Path()),
-                    fiber.StatusMovedPermanently,
-                )
+		if config.Logger {
+			if record != nil {
+				logger.Infof("IP: %s, Country: %s, City: %s", c.IP(), record.Country.Names["en"], record.City.Names["en"])
+			} else {
+				logger.Infof("IP: %s", c.IP())
+			}
+		}
 
-                logger.Info("Connection from: " + c.IP() + " | Fetching file from CDN: " + c.Path())
-                return nil
-            }
+		if len(config.GeoLocation) > 0 && record != nil {
+			allowed := false
+			for _, loc := range config.GeoLocation {
+				if record.Country.IsoCode == loc {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return c.Status(fiber.StatusForbidden).SendString("Access denied: Region not allowed")
+			}
+		}
 
-            file, err := os.Open(pathname)
-            if err != nil {
-                return c.Status(fiber.StatusNotFound).SendString("error from loading")
-            }
-            defer file.Close()
+		return c.Next()
+	})
 
-            buffer, err := io.ReadAll(file)
-            if err != nil {
-                return c.Status(fiber.StatusNotFound).SendString("error")
-            }
+	cdnUrl := config.ServerCdn
+	if cdnUrl == "default" {
+		cdnUrl = "0098/5858486/"
+	}
 
-            contentTypes := map[string]string{
-                ".ico":  "image/x-icon",
-                ".html": "text/html",
-                ".js":   "text/javascript",
-                ".json": "application/json",
-                ".css":  "text/css",
-                ".png":  "image/png",
-                ".jpg":  "image/jpeg",
-                ".wav":  "audio/wav",
-                ".mp3":  "audio/mpeg",
-                ".svg":  "image/svg+xml",
-                ".pdf":  "application/pdf",
-                ".doc":  "application/msword",
-            }
+	app.Use(func(c *fiber.Ctx) error {
+		if strings.HasPrefix(c.Path(), "/cache") {
+			pathname := filepath.Join("./cache", c.Path())
 
-            ext := filepath.Ext(c.Path())
-            c.Set("Content-Type", contentTypes[ext])
+			if _, err := os.Stat(pathname); os.IsNotExist(err) {
+				if config.Logger {
+					logger.Info("Connection from: " + c.IP() + " | Fetching file from CDN: " + c.Path())
+				}
+				return c.Redirect(
+					fmt.Sprintf("https://ubistatic-a.akamaihd.net/%s%s", cdnUrl, c.Path()),
+					fiber.StatusMovedPermanently,
+				)
+			}
 
-            return c.Send(buffer)
-        }
-        return c.Next()
-    })
+			ext := filepath.Ext(c.Path())
+			if contentType, ok := contentTypes[ext]; ok {
+				c.Set("Content-Type", contentType)
+			}
 
-    app.Get("/", func(c *fiber.Ctx) error {
-        return c.SendString("Hello, World!")
-    })
+			if err := c.SendFile(pathname); err != nil {
+				if config.Logger {
+					logger.Error("Failed to send file ", pathname, ": ", err)
+				}
+				return c.Status(fiber.StatusInternalServerError).SendString("Failed to serve file")
+			}
+			return nil
+		}
+		return c.Next()
+	})
 
-    meta := config.ServerMeta
-    if meta == "" {
-        meta = "default"
-    }
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendString("Hello, World!")
+	})
 
-    loginUrl := config.LoginUrl
-    if loginUrl == "default" {
-        loginUrl = "login-web-sigma.vercel.app" // default login url that i built for public use
-    }
-    content := fmt.Sprintf(
-        "server|%s\n"+
-            "port|%s\n"+
-            "type|1\n"+
-            "# maint|Server is currently down for maintenance. We will be back soon!\n"+
-            "loginurl|%s\n"+
-            "meta|%s\n"+
-            "RTENDMARKERBS1001",
-        config.Host, config.Port, loginUrl, meta)
+	meta := config.ServerMeta
+	if meta == "" {
+		meta = "default"
+	}
 
-    app.Post("/growtopia/server_data.php", func(c *fiber.Ctx) error {
-        if c.Get("User-Agent") == "" || !strings.Contains(c.Get("User-Agent"), "UbiServices_SDK") {
-            return c.SendStatus(fiber.StatusForbidden)
-        }
-        return c.SendString(content)
-    })
+	loginUrl := config.LoginUrl
+	if loginUrl == "default" {
+		loginUrl = "login-web-sigma.vercel.app"
+	}
+	content := fmt.Sprintf(
+		"server|%s\n"+
+			"port|%s\n"+
+			"type|1\n"+
+			"# maint|Server is currently down for maintenance. We will be back soon!\n"+
+			"loginurl|%s\n"+
+			"meta|%s\n"+
+			"RTENDMARKERBS1001",
+		config.Host, config.Port, loginUrl, meta)
 
-    app.Use(func(c *fiber.Ctx) error {
-        return c.Status(fiber.StatusNotFound).SendString("404 Not Found")
-    })
+	app.Post("/growtopia/server_data.php", func(c *fiber.Ctx) error {
+		if c.Get("User-Agent") == "" || !strings.Contains(c.Get("User-Agent"), "UbiServices_SDK") {
+			return c.SendStatus(fiber.StatusForbidden)
+		}
+		return c.SendString(content)
+	})
 
-    go triggerGarbageCollection()
+	app.Use(func(c *fiber.Ctx) error {
+		return c.Status(fiber.StatusNotFound).SendString("404 Not Found")
+	})
 
-    return app
+	go cleanupExpiredEntries()
+
+	return app
 }
 
+// @note start HTTP server with graceful shutdown
 func Start(app *fiber.App) {
-    logger.Info("Starting HTTP Server")
+	logger.Info("Starting HTTP Server")
 
-    log.Fatal(app.ListenTLS(":443", "ssl/server.crt", "ssl/server.key"))
+	go func() {
+		if err := app.ListenTLS(":443", "ssl/server.crt", "ssl/server.key"); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+
+	logger.Info("Shutting down server gracefully...")
+	if err := app.ShutdownWithTimeout(30 * time.Second); err != nil {
+		logger.Error("Error during shutdown:", err)
+	}
+	logger.Info("Server stopped")
 }

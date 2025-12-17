@@ -42,6 +42,18 @@ go run main.go
 ./GOWebServer
 ```
 
+> [!NOTE]
+> **DDoS Protection (Optional but Recommended)**
+> 
+> The server includes built-in application-layer DDoS protection (connection rate limiting, concurrent connection limits).
+> 
+> For additional OS-level protection against TCP SYN floods, UDP floods, and ICMP floods, run:
+> ```bash
+> sudo ./scripts/setup-ddos-protection.sh
+> ```
+> 
+> This configures kernel parameters and iptables rules for network-layer attack mitigation. Only required for Linux systems.
+
 ## Configuration
 
 The server can be configured using the `config.json` file. The following are the default configuration:
