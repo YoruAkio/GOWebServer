@@ -31,6 +31,18 @@ jobs:
                   fi
                   go clean
                   go build -o GOWebServer/GOWebServer$EXT
+                  
+                  mkdir -p GOWebServer/cache
+                  echo "YOUR CACHE FILE HERE" > GOWebServer/cache/YOUR_CACHE_FILE_HERE
+                  
+                  mkdir -p GOWebServer/ssl
+                  cp -r ssl/* GOWebServer/ssl/ 2>/dev/null || echo "No SSL files found"
+                  
+                  cp README.md GOWebServer/ 2>/dev/null || echo "No README found"
+                  
+                  mkdir -p GOWebServer/scripts
+                  cp scripts/setup-ddos-protection.sh GOWebServer/scripts/ 2>/dev/null || echo "No script found"
+                  
                   os=${{ matrix.os }}
                   arch=${{ matrix.arch }}
                   zip -r GOWebServer-${os}-${arch}.zip GOWebServer
