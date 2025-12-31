@@ -1,15 +1,19 @@
+<div align="center">
+
 # GOWebServer
 
 GOWebServer is a web server for Growtopia Private Server. It is written in Go and is designed to be fast and efficient.
 
-## To-Do
+</div>
 
-- [x] Basic HTTP server
-- [x] Handle `/growtopia/server_data.php` requests
-- [x] Implementing rate limiting requests
-- [x] Implementing cache server for Growtopia Client
-- [x] Handling missing cache files
-- [x] Geo Location checker to block certain countries
+## Features
+
+- HTTP/HTTPS server with TLS support
+- Handle `/growtopia/server_data.php` requests
+- Advanced DDoS protection (rate limiting, connection tracking, IP blacklisting)
+- Proxy detection with circuit breaker pattern
+- Cache server for Growtopia Client with CDN fallback
+- Geo Location blocking based on country codes
 
 ## Build
 
