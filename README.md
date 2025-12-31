@@ -17,6 +17,18 @@ GOWebServer is a web server for Growtopia Private Server. It is written in Go an
 
 ## Build
 
+### Using Pre-built Binary
+
+Download the pre-built binary for your operating system from the [releases page](https://github.com/yoruakio/GOWebServer/releases):
+
+- **Windows**: Download `GOWebServer-windows-amd64.zip`
+- **Linux**: Download `GOWebServer-linux-amd64.zip`
+- **macOS**: Download `GOWebServer-darwin-amd64.zip`
+
+Extract the archive and run the executable.
+
+### Building from Source
+
 The following are required to build and run GOWebServer:
 
 - [Golang](https://golang.org/dl/) (1.16+) - The Go Programming Language
@@ -27,8 +39,8 @@ Building the server is simple, just run the following command:
 1. Clone the repository:
 
 ```bash
-# Clone the repository and its submodules for the requirements of geo location detection
-git clone https://github.com/yoruakio/GOWebServer.git --recursive
+git clone https://github.com/yoruakio/GOWebServer.git
+cd GOWebServer
 ```
 
 2. Build the server:

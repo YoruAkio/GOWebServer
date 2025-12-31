@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -66,6 +67,80 @@ var (
 		".doc":  "application/msword",
 	}
 )
+
+const geoLite2URL = "https://codeberg.org/Vo/GOWebServer-Depedencies/raw/branch/main/GeoLite2-City.mmdb"
+
+// @note progress writer for tracking download progress
+type progressWriter struct {
+	total      int64
+	downloaded int64
+	startTime  time.Time
+	lastUpdate time.Time
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	pw.downloaded += int64(n)
+
+	now := time.Now()
+	if now.Sub(pw.lastUpdate) >= 500*time.Millisecond || pw.downloaded == pw.total {
+		elapsed := now.Sub(pw.startTime).Seconds()
+		speed := float64(pw.downloaded) / elapsed / 1024 / 1024
+		progress := float64(pw.downloaded) / float64(pw.total) * 100
+
+		downloadedMB := float64(pw.downloaded) / 1024 / 1024
+		totalMB := float64(pw.total) / 1024 / 1024
+
+		logger.Infof("Downloading: %.2f/%.2f MB (%.1f%%) - %.2f MB/s",
+			downloadedMB, totalMB, progress, speed)
+
+		pw.lastUpdate = now
+	}
+
+	return n, nil
+}
+
+// @note download GeoLite2 database from remote repository
+func downloadGeoLite2DB(filepath string) error {
+	dir := "mmdb/GOWebServer-Depedencies"
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+	}
+
+	resp, err := client.Get(geoLite2URL)
+	if err != nil {
+		return fmt.Errorf("failed to download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status: %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(filepath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer out.Close()
+
+	pw := &progressWriter{
+		total:      resp.ContentLength,
+		startTime:  time.Now(),
+		lastUpdate: time.Now(),
+	}
+
+	writer := io.MultiWriter(out, pw)
+
+	if _, err := io.Copy(writer, resp.Body); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
+}
 
 type IPAPIResponse struct {
 	Query       string  `json:"query"`
@@ -291,10 +366,27 @@ func Initialize() *fiber.App {
 	var err error
 
 	if config.EnableGeo {
-		if db, err = geoip2.Open("mmdb/GOWebServer-Depedencies/GeoLite2-City.mmdb"); err != nil {
-			logger.Error("Failed to open GeoLite2-City.mmdb: ", err)
-			logger.Error("Did you use --recursive when cloning? See README.md")
-			config.EnableGeo = false
+		mmdbPath := "mmdb/GOWebServer-Depedencies/GeoLite2-City.mmdb"
+
+		if _, err := os.Stat(mmdbPath); os.IsNotExist(err) {
+			logger.Info("GeoLite2-City.mmdb not found, attempting to download...")
+			if err := downloadGeoLite2DB(mmdbPath); err != nil {
+				logger.Error("Failed to download GeoLite2-City.mmdb: ", err)
+				logger.Info("Geo Location will be disabled")
+				config.EnableGeo = false
+			} else {
+				logger.Info("GeoLite2-City.mmdb downloaded successfully")
+			}
+		}
+
+		if config.EnableGeo {
+			if db, err = geoip2.Open(mmdbPath); err != nil {
+				logger.Error("Failed to open GeoLite2-City.mmdb: ", err)
+				logger.Info("Deleting corrupted database file...")
+				os.Remove(mmdbPath)
+				logger.Info("Geo Location will be disabled")
+				config.EnableGeo = false
+			}
 		}
 	}
 
