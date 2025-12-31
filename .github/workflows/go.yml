@@ -30,7 +30,7 @@ jobs:
                     EXT=".exe"
                   fi
                   go clean
-                  go build -o GOWebServer/GOWebServer$EXT
+                  GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -o GOWebServer/GOWebServer$EXT
                   
                   mkdir -p GOWebServer/cache
                   echo "YOUR CACHE FILE HERE" > GOWebServer/cache/YOUR_CACHE_FILE_HERE
