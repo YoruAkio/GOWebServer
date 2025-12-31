@@ -1,16 +1,42 @@
 package logger
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/sirupsen/logrus"
 )
 
 var log = logrus.New()
 
-func init() {
-	log.Formatter = &logrus.TextFormatter{
-		TimestampFormat: "01-02 15:04:05",
-		FullTimestamp:   true,
+// @note custom plain formatter for cross-platform compatibility
+type plainFormatter struct{}
+
+func (f *plainFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	timestamp := entry.Time.Format("15:04")
+	level := entry.Level.String()
+
+	switch entry.Level {
+	case logrus.InfoLevel:
+		level = "INFO"
+	case logrus.WarnLevel:
+		level = "WARN"
+	case logrus.ErrorLevel:
+		level = "ERROR"
+	case logrus.FatalLevel:
+		level = "FATAL"
+	case logrus.DebugLevel:
+		level = "DEBUG"
 	}
+
+	msg := fmt.Sprintf("%s - %s - %s\n", level, timestamp, entry.Message)
+	return []byte(msg), nil
+}
+
+func init() {
+	log.SetOutput(os.Stdout)
+	log.SetFormatter(&plainFormatter{})
+	log.SetLevel(logrus.InfoLevel)
 }
 
 func Info(args ...interface{}) {
