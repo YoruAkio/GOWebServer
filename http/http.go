@@ -516,7 +516,7 @@ func Initialize() *fiber.App {
 
 	cdnUrl := config.ServerCdn
 	if cdnUrl == "default" {
-		cdnUrl = "0098/5858486/"
+		cdnUrl = "0098/0181220253/" // @note 31-12-2025 update ( 5.39 )
 	}
 
 	app.Use(func(c *fiber.Ctx) error {
@@ -560,7 +560,7 @@ func Initialize() *fiber.App {
 
 	loginUrl := config.LoginUrl
 	if loginUrl == "default" {
-		loginUrl = "login-web-sigma.vercel.app"
+		loginUrl = "gt-login.vercel.app" // @note 31-12-2025 update
 	}
 	content := fmt.Sprintf(
 		"server|%s\n"+

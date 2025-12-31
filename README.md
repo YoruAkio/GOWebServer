@@ -78,8 +78,8 @@ The server can be configured using the `config.json` file. The following are the
 {
     "host": "127.0.0.1", // ENet Host
     "port": "17091", // ENet Port
-    "serverCdn": "", // Growtopia CDN to handle missing files
-    "loginUrl": "gtlogin-backend.vercel.app", // URI for client login
+    "serverCdn": "default", // Growtopia CDN to handle missing files ( default: 0098/0181220253/ - 5.39 )
+    "loginUrl": "default", // URI for client login ( default: gt-login.vercel.app - 31-12-2025 update )
     "isLogging": false,
     "rateLimit": 300,
     "rateLimitDuration": 5,
